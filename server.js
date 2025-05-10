@@ -5,12 +5,19 @@ const axios = require("axios")
 
 const crypto = require('crypto');
 const server = express();
-
+ 
 const unirest = require("unirest");
 
 const  cors = require('cors');
 server.use(express.json());
-server.use(cors());
+server.use(cors()); 
+const Scraper = require('./google');
+
+server.use(express.static(path.join(__dirname, 'public')));
+
+
+const google = new Scraper();
+
 
 // server.get('/wallpaper' ,  async (req, res) => {
 
@@ -403,41 +410,44 @@ server.get('/discussions/anime', async (req ,res) => {
         'Facebook'
     ];
     const getImagesData = async (query) => {
-        const selectRandom = () => {
-        const userAgents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36",
-        ];
-        var randomNumber = Math.floor(Math.random() * userAgents.length);
-        return userAgents[randomNumber];
-        };
-        let user_agent = selectRandom();
-        let header = {
-        "User-Agent": `${user_agent}`,
-        };
-        var u = await unirest
-        .get(
-            `https://www.google.com/search?q=${query}&oq=${query}&hl=en&tbm=isch&asearch=arc&async=_id:rg_s,_pms:s,_fmt:pc&sourceid=chrome&ie=UTF-8`
-        )
-        .headers(header);
-        console.log(   `https://www.google.com/search?q=${query}&oq=${query}&hl=en&tbm=isch&asearch=arc&async=_id:rg_s,_pms:s,_fmt:pc&sourceid=chrome&ie=UTF-8`);
-        let $ = cheerio.load(u.body);
-        let images_results = [];
-        $("div.rg_bx").each(async(i, el) => {
-        let json_string =   $(el).find(".rg_meta").text();
-        let json = await JSON.parse(json_string);
-        if(bannedList.includes(json.st)) return;
-        images_results.push({
-            'src' : json.ou,
-            'width': json.ow,
-            'height': json.oh
-        });
-        });
-        return images_results;
+        // const selectRandom = () => {
+        // const userAgents = [
+        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36",
+        //     "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36",
+        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36",
+        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
+        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36",
+        // ];
+        // var randomNumber = Math.floor(Math.random() * userAgents.length);
+        // return userAgents[randomNumber];
+        // };
+        // let user_agent = selectRandom();
+        // let header = {
+        // "User-Agent": `${user_agent}`,
+        // };
+        // var u = await unirest
+        // .get(
+        //     `https://www.google.com/search?q=${query}&oq=${query}&hl=en&tbm=isch&asearch=arc&async=_id:rg_s,_pms:s,_fmt:pc&sourceid=chrome&ie=UTF-8`
+        // )
+        // .headers(header);
+        // console.log(   `https://www.google.com/search?q=${query}&oq=${query}&hl=en&tbm=isch&asearch=arc&async=_id:rg_s,_pms:s,_fmt:pc&sourceid=chrome&ie=UTF-8`);
+        // let $ = cheerio.load(u.body);
+        // let images_results = [];
+        // $("div.rg_bx").each(async(i, el) => {
+        // let json_string =   $(el).find(".rg_meta").text();
+        // let json = await JSON.parse(json_string);
+        // if(bannedList.includes(json.st)) return;
+        // images_results.push({
+        //     'src' : json.ou,
+        //     'width': json.ow,
+        //     'height': json.oh
+        // });
+        // });
+        // return images_results;
+
+        const results = await google.getImageUrl(query, 20);
+        return results;
     };
     
 
