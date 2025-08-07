@@ -16,7 +16,7 @@
   },
   
   "engines": {
-    "node": "16.14.2"
+    "node": "18.20.8"
   },
   "name": "anime_zone_server",
   "version": "1.0.0",
