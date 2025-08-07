@@ -1,22 +1,29 @@
 const express = require('express');
+const schedule = require('node-schedule');
 
 const cheerio = require("cheerio")
 const axios = require("axios")
-const path = require('path')
+const fs = require('node:fs/promises')
+
 const crypto = require('crypto');
 const server = express();
- 
+
 const unirest = require("unirest");
 
 const  cors = require('cors');
 server.use(express.json());
-server.use(cors()); 
-const Scraper = require('./google');
- 
-server.use(express.static(path.join(__dirname, 'public')));
+server.use(cors());
+
+var admin = require("firebase-admin");
 
 
-const google = new Scraper();
+var serviceAccount = require(__dirname+"/serviceAccountKey.json");
+
+admin.initializeApp({
+
+  credential: admin.credential.cert(serviceAccount)
+
+});
 
 
 // server.get('/wallpaper' ,  async (req, res) => {
@@ -28,66 +35,181 @@ const google = new Scraper();
 // });
 
 
-server.get('/news/anime', async(req, res) =>{
+server.get('/forums', async(req, res) =>{
+   
+
+    if(req.query.id == undefined && req.query.action == null) return res.send('Error: No board specicified!');
+  res.send(await getForums({
+    'subboard' : req.query.id,
+    'type': req.query.type,
+    'action':  req.query.action,
+    'show' :  ((req.query.page??1) - 1) * 50,
+  }));
+});
+
+
+server.get('/news/recent', async(req, res) =>{
+    const filters = req.query.filters;
+   
+
+  res.send(await getNews("https://myanimelist.net/news" , filters , req.query.page ??1));
+});
+
+
+server.get('/news/:tag', async(req, res) =>{
+    const filters = req.query.filters;
+   
+
+  res.send(await getNews(`https://myanimelist.net/news/tag/${req.params.tag}` , filters, req.query.page ??1));
+});
+
+const getForums = async (query)=>{
     const axiosResponse = await axios.request({
         method: "GET",
-        url: "https://myanimelist.net/news",
+        url: "https://myanimelist.net/forum",
+        headers: {
+            "User-Agent": getUserAgent(),
+        },
+        params: query,
+
+    }); 
+    const $ = cheerio.load(axiosResponse.data)
+
+
+    const list = [];
+    const dataList  =  $('#forumTopics').children().first().children();
+    for(const element of dataList){
+        const id = $(element).attr('data-topic-id');
+        if(id != null){
+            const firstRow = $(element).children().first().next();
+            const title = firstRow.children().first().text();
+            const url = `https://myanimelist.net${firstRow.children().first().attr('href')}`;
+            const author = firstRow.find('.forum_postusername').children().first();
+            const authorUsername= author.text().trim();
+            const authorUrl = `https://myanimelist.net${author.attr('href')}`;
+            const date = firstRow.find('.lightLink').text().trim();
+            const dateObject = new Date(date);
+ 
+
+            const secondRow = query.action != 'recent' ? firstRow.next(): firstRow.next().next();
+            const comments = secondRow.text().trim();
+
+            const thirdRow = secondRow.next();
+            const lastCommentUsername = thirdRow.children().first().text();
+            const lastCommentDate = thirdRow.get().at(-1).lastChild.data;
+    
+            const all = {
+                mal_id: parseInt(id), 
+                title: title,
+                url: url, 
+                author_username: authorUsername,
+                author_url: authorUrl,
+                date: dateObject,
+                comments: parseInt(comments),
+                last_comment:{
+                    username: lastCommentUsername,
+                    date: lastCommentDate
+                },
+                
+            };
+
+
+            if(query.action != undefined){
+            
+                const board = firstRow.next().children().first();
+                const boardName = board.text();
+                const boardUrl = board.attr('href');
+                all['board'] = {
+                    'name' : boardName,
+                    'url' : boardUrl,
+                };
+            }else{
+                const content = firstRow.find('.forum_postusername').prev().children().first();
+                const contentName = content.text();
+
+                const contentUrl = content.attr('href');
+                const contentId = contentUrl.split('=').at(1);
+                const contentType = contentUrl.split('=').at(0).split('?').at(1).replace('id' , '');
+                all['entry'] = {
+                    'name' : contentName,
+                    'id': parseInt(contentId),
+                    'type': contentType
+                };
+            }
+            
+        list.push(all);
+        }
+}
+
+return list;
+};
+
+const getNews = async (url , filters , page)=>{
+    const axiosResponse = await axios.request({
+        method: "GET",
+        url: url,
 
         headers: {
             "User-Agent": getUserAgent(),
-            Cookie: `news_category_filter={"all":false,"cat1":true,"cat2":false,"cat3":false,"cat4":false,"cat5":false,"cat6":false};`
+        },
+        params :{
+            p: page
         }
     });
 
     const $ = cheerio.load(axiosResponse.data)
 
+    var lastVisiblePage = $('.pagination').get().at(0).childNodes.at(-1);
+    if(lastVisiblePage == undefined) lastVisiblePage = 1;
+    else lastVisiblePage = parseInt(lastVisiblePage.attribs.href.split('=').at(1));
+
     const list = [];
     const dataList  =  $('.news-list')
     .find('.news-unit');
     for(const element of dataList){
+        const tags = $(element).attr('data-tag').split(' ').filter(elm => elm);
+        if(!(filters!= undefined &&! filters.split(',').map((e) => `cat${e}`).some(item => tags.includes(item)))) {
         const title  = $(element).find('.title').text().trim();
         if(title != ''){
-         const imageLinkElement = $(element).find('.image-link');
-            const newsLink = imageLinkElement.attr('href');
-            const imageSrc = imageLinkElement.find('.image').attr('srcset');
-    
-            /*
-            https://cdn.myanimelist.net/r/100x156/s/common/uploaded_files/1720619905-29db93b05365f0f4c0e9a8c93090b789.jpeg?s=835fef33244aab5a7411006998c11f85 1x,
-             https://cdn.myanimelist.net/r/200x312/s/common/uploaded_files/1720619905-29db93b05365f0f4c0e9a8c93090b789.jpeg?s=e450e090b1d69ff0e75fb20ae8a23b8c 2x
-            */
-           const imageId = imageSrc.split(', ')[1].split(' ')[0].replace('').split('/').at(-1).split('?')[0];
+         const imageUrlElement = $(element).find('.image-link');
+            const newsUrl = imageUrlElement.attr('href');
+            const imageSrc = imageUrlElement.find('.image').attr('srcset');
+            const imageId = imageSrc.split(', ')[1].split(' ')[0].replace('').split('/').at(-1).split('?')[0];
      
-           const image = `https://cdn.myanimelist.net/s/common/uploaded_files/${imageId}`;
-            const description  = $(element).find('.text').text().trim();
+            const image = `https://cdn.myanimelist.net/s/common/uploaded_files/${imageId}`;
+            const excerpt  = $(element).find('.text').text().trim();
             
             const information  = $(element).find('.information');
-            const time = information.find('.info').text().trim();
+            const date = information.find('.info').text().trim();
             const author = information.find('.info').children().first();
-            const authorName= author.text().trim();
-            const authorLink = author.attr('href');
+            const authorUsername= author.text().trim();
+            const authorUrl = author.attr('href');
             const comment = information.find('.info').children().last();
-            const commentCount= parseInt(comment.text().trim().split(' ')[0]);
-            const commentLink = comment.attr('href');
-    
+            const comments= parseInt(comment.text().trim().split(' ')[0]);
+            const forumUrl = comment.attr('href');
     
             const all = {
-                link: newsLink,
-                image:image,
+                mal_id: parseInt(newsUrl.split('/').at(-1)),
+                url: newsUrl,
                 title: title,
-                description: description,
-                time : time,
-                authorName: authorName,
-                authorLink: authorLink,
-                commentCount: commentCount,
-                commentLink: commentLink
+                date : date,
+                author_username: authorUsername,
+                author_url: authorUrl,
+                forum_url: forumUrl,
+                images:{'jpg':{'image_url':image}},
+                excerpt: excerpt,
+                comments: comments,
             };
             
             list.push(all);
         }
     }
+}
 
-  res.send(list);
-});
+return {
+    last_visible_page: lastVisiblePage,
+    data: list};
+};
 
 server.get('/news', async(req, res) =>{
     if(req.query.id == undefined) return;
@@ -164,104 +286,108 @@ server.get('/wallpaper' , async (req, res) => {
 });
 
 
-server.get('/articles', async (req ,res) => {
-    var url = "https://myanimelist.net/featured";
-    if(req.query.page != null){
-        url +='?p=' + req.query.page;
-    }
-    const axiosResponse = await axios.request({
-        method: "GET",
-        url:url,
-        headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-        }
-    });
+// server.get('/articles', async (req ,res) => {
+//     var url = "https://myanimelist.net/featured";
+//     if(req.query.page != null){
+//         url +='?p=' + req.query.page;
+//     }
+//     const axiosResponse = await axios.request({
+//         method: "GET",
+//         url:url,
+//         headers: {
+//             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+//         }
+//     });
 
-    const $ = cheerio.load(axiosResponse.data)
+//     const $ = cheerio.load(axiosResponse.data)
 
-    const list = [];
-    $('.content-left')
-    .find('.featured-pickup-unit')
-    .each((index , element) =>{
+//     const list = [];
+//     $('.content-left')
+//     .find('.featured-pickup-unit')
+//     .each((index , element) =>{
 
-        const imageLinkElement = $(element).find('.image');
+//         const imageLinkElement = $(element).find('.image');
 
-        const link= imageLinkElement.attr('href');
-        const image = imageLinkElement.attr('data-bg');
-        const title = $(element).find('.title').text().trim();
-        const description = $(element).find('.text').text().trim();
+//         const link= imageLinkElement.attr('href');
+//         const image = imageLinkElement.attr('data-bg');
+//         const title = $(element).find('.title').text().trim();
+//         const description = $(element).find('.text').text().trim();
 
-        const information = $(element).find('.information');
-        const author = information.children().first().children().first();
-        const authorName = author.text();
-        const authorLink =  author.attr('href');
+//         const information = $(element).find('.information');
+//         const author = information.children().first().children().first();
+//         const authorName = author.text();
+//         const authorLink =  author.attr('href');
 
-        const views = information.children().next().children().first().text();
+//         const views = information.children().next().children().first().text();
 
-        const tags = information.find('.tags');
-        const tag = tags.contents().text().trim();
+//         const tags = information.find('.tags');
+//         const tag = tags.contents().text().trim();
         
-        const all = {
-            featured: true,
-            link:  link,
-            image: image.replace('/r/350x160' , ''),
-            title: title,
-            description: description,
-            authorName: authorName,
-            authorLink: authorLink,
-            views: parseInt(views.replace(',' , '')),
-            ...tag != '' && {tag: tag}
-        };
+//         const all = {
+//             featured: true,
+//             link:  link,
+//             image: image.replace('/r/350x160' , ''),
+//             title: title,
+//             description: description,
+//             authorName: authorName,
+//             authorLink: authorLink,
+//             views: parseInt(views.replace(',' , '')),
+//             ...tag != '' && {tag: tag}
+//         };
 
-        list.push(all);
-    });
+//         list.push(all);
+//     });
 
-    $('.content-left')
-    .find('.news-unit')
-    .each((index , element) =>{
+//     $('.content-left')
+//     .find('.news-unit')
+//     .each((index , element) =>{
 
-        const imageLinkElement = $(element).find('.image-link');
+//         const imageLinkElement = $(element).find('.image-link');
 
-        const link= imageLinkElement.attr('href');
-        const image = imageLinkElement.find('.image').attr('data-src');
-        const title = $(element).find('.title').text().trim();
-        const description = $(element).find('.text').text().trim();
+//         const link= imageLinkElement.attr('href');
+//         const image = imageLinkElement.find('.image').attr('data-src');
+//         const title = $(element).find('.title').text().trim();
+//         const description = $(element).find('.text').text().trim();
 
-        const information = $(element).find('.information');
-        const author = information.children().first().children().first();
-        const authorName = author.text();
-        const authorLink =  author.attr('href');
+//         const information = $(element).find('.information');
+//         const author = information.children().first().children().first();
+//         const authorName = author.text();
+//         const authorLink =  author.attr('href');
 
-        const views = information.children().next().children().first().text();
+//         const views = information.children().next().children().first().text();
 
-        const tags = information.find('.tags');
-        const tag = tags.contents().text().trim();
+//         const tags = information.find('.tags');
+//         const tag = tags.contents().text().trim();
         
-        const all = {
-            featured: false,
-            link:  link,
-            image: image,
-            title: title,
-            description: description,
-            authorName: authorName,
-            authorLink: authorLink,
-            views: parseInt(views.replace(',' , '')),
-            ...tag != '' && {tag: tag}
-        };
+//         const all = {
+//             featured: false,
+//             link:  link,
+//             image: image,
+//             title: title,
+//             description: description,
+//             authorName: authorName,
+//             authorLink: authorLink,
+//             views: parseInt(views.replace(',' , '')),
+//             ...tag != '' && {tag: tag}
+//         };
 
-        list.push(all);
-    });
+//         list.push(all);
+//     });
 
-    res.send(list);
-});
+//     res.send(list);
+// });
 
 server.get('/discussions/anime', async (req ,res) => {   
     try{
     const axiosResponse = await axios.request({
         method: "GET",
-        url:`https://myanimelist.net/forum/?topicid=${req.query.id}`,
+        url:`https://myanimelist.net/forum`,
         headers: {
            "User-Agent":getUserAgent(),
+        },
+        params: {
+            topicid: req.query.id,
+            show :  ((req.query.page??1) - 1) * 50,
         }
     });
 
@@ -269,6 +395,10 @@ server.get('/discussions/anime', async (req ,res) => {
 
     const title = $('.forum_locheader').text();
     const list = [];
+
+    var lastVisiblePage = $('.pages').get().at(0).childNodes.at(0);
+    if(lastVisiblePage == undefined) lastVisiblePage = 1;
+    else lastVisiblePage = parseInt(lastVisiblePage.data.split('(').at(1).split(')').at(0));
     var topic;
     $('.forum-topic-message')
     .each((index , element) =>{
@@ -375,6 +505,8 @@ server.get('/discussions/anime', async (req ,res) => {
     });
     res.send({
         url: `https://myanimelist.net/forum/?topicid=${req.query.id}`,
+        current_page :  parseInt(req.query.page??1),
+        last_visible_page: lastVisiblePage,
         title: title,
         topic: topic,
         replies: list
@@ -410,44 +542,40 @@ server.get('/discussions/anime', async (req ,res) => {
         'Facebook'
     ];
     const getImagesData = async (query) => {
-        // const selectRandom = () => {
-        // const userAgents = [
-        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36",
-        //     "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36",
-        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36",
-        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
-        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
-        //     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36",
-        // ];
-        // var randomNumber = Math.floor(Math.random() * userAgents.length);
-        // return userAgents[randomNumber];
-        // };
-        // let user_agent = selectRandom();
-        // let header = {
-        // "User-Agent": `${user_agent}`,
-        // };
-        // var u = await unirest
-        // .get(
-        //     `https://www.google.com/search?q=${query}&oq=${query}&hl=en&tbm=isch&asearch=arc&async=_id:rg_s,_pms:s,_fmt:pc&sourceid=chrome&ie=UTF-8`
-        // )
-        // .headers(header);
-        // console.log(   `https://www.google.com/search?q=${query}&oq=${query}&hl=en&tbm=isch&asearch=arc&async=_id:rg_s,_pms:s,_fmt:pc&sourceid=chrome&ie=UTF-8`);
-        // let $ = cheerio.load(u.body);
-        // let images_results = [];
-        // $("div.rg_bx").each(async(i, el) => {
-        // let json_string =   $(el).find(".rg_meta").text();
-        // let json = await JSON.parse(json_string);
-        // if(bannedList.includes(json.st)) return;
-        // images_results.push({
-        //     'src' : json.ou,
-        //     'width': json.ow,
-        //     'height': json.oh
-        // });
-        // });
-        // return images_results;
-
-        const results = await google.getImageUrl(query, 20);
-        return results;
+        const selectRandom = () => {
+        const userAgents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36",
+        ];
+        var randomNumber = Math.floor(Math.random() * userAgents.length);
+        return userAgents[randomNumber];
+        };
+        let user_agent = selectRandom();
+        let header = {
+        "User-Agent": `${user_agent}`,
+        };
+        var u = await unirest
+        .get(
+            `https://www.google.com/search?q=${query}&oq=${query}&hl=en&tbm=isch&asearch=arc&async=_id:rg_s,_pms:s,_fmt:pc&sourceid=chrome&ie=UTF-8`
+        )
+        .headers(header);
+        let $ = cheerio.load(u.body);
+        let images_results = [];
+        $("div.rg_bx").each(async(i, el) => {
+        let json_string =   $(el).find(".rg_meta").text();
+        let json = await JSON.parse(json_string);
+        if(bannedList.includes(json.st)) return;
+        images_results.push({
+            'src' : json.ou,
+            'width': json.ow,
+            'height': json.oh
+        });
+        });
+        return images_results;
     };
     
 
@@ -485,5 +613,104 @@ server.get('/discussions/anime', async (req ,res) => {
             var randomNumber = Math.floor(Math.random() * userAgents.length);
             return userAgents[randomNumber];         
     };
+
+
+const getLastNews = async ()=>{
+    const axiosResponse = await axios.request({
+        method: "GET",
+        url: 'https://myanimelist.net/news',
+        headers: {
+            "User-Agent": getUserAgent(),
+        },
+    });
+
+    const $ = cheerio.load(axiosResponse.data)
+
+    const list = [];
+    const element  =  $('.news-list')
+    .find('.news-unit').first();
+        const title  = $(element).find('.title').text().trim();
+        if(title != ''){
+         const imageUrlElement = $(element).find('.image-link');
+            const newsUrl = imageUrlElement.attr('href');
+            const imageSrc = imageUrlElement.find('.image').attr('srcset');
+            const imageId = imageSrc.split(', ')[1].split(' ')[0].replace('').split('/').at(-1).split('?')[0];
+     
+            const image = `https://cdn.myanimelist.net/s/common/uploaded_files/${imageId}`;
+            const excerpt  = $(element).find('.text').text().trim();
+            
+            const information  = $(element).find('.information');
+            const date = information.find('.info').text().trim();
+            const author = information.find('.info').children().first();
+            const authorUsername= author.text().trim();
+            const authorUrl = author.attr('href');
+            const comment = information.find('.info').children().last();
+            const comments= parseInt(comment.text().trim().split(' ')[0]);
+            const forumUrl = comment.attr('href');
+    
+            const all = {
+                mal_id: parseInt(newsUrl.split('/').at(-1)),
+                url: newsUrl,
+                title: title,
+                date : date,
+                author_username: authorUsername,
+                author_url: authorUrl,
+                forum_url: forumUrl,
+                images:{'jpg':{'image_url':image}},
+                excerpt: excerpt,
+                comments: comments,
+            };
+            return all;
+}
+};
+
+const sendNotification = (news)=>{
+    const message = {
+        data: {
+          news_id: news.id
+        },
+        notification: {
+          title:news.title,
+          body: news.body
+        },
+        android: {
+          notification: {
+            imageUrl: news.imageUrl,
+            color: '#FFA245'
+          }
+        },        
+        topic : "RecentNews"   
+  }; 
+    
+    admin.messaging().send(message)
+    .then((response) => {
+      console.log('Successfully sent message:'+ response);
+    })
+    .catch((error) => {
+        console.log('Error sending message:'+ error);
+    });
+}
+
+const check = async (fireDate) =>{
+    const newNews = await getLastNews();
+    var data;
+    var lastNews;
+    try{
+        data = await fs.readFile('lastNews.txt', { encoding: 'utf8' });
+        lastNews =JSON.parse(data); 
+    }catch(e){}
+    console.log(lastNews);
+    if(lastNews != undefined && lastNews.mal_id != newNews.mal_id){
+        sendNotification({
+            title : newNews.title,
+            body: newNews.excerpt,
+            imageUrl : newNews.images.jpg.image_url,
+            id: newNews.forum_url.split('=').at(1)
+        });
+    }
+    fs.writeFile('lastNews.txt', JSON.stringify(newNews));
+  };
+
+schedule.scheduleJob('0 */4 * * * *',check ); 
 
 server.listen(3000 , () => console.log('Listening on Port 3000..'));
