@@ -2,7 +2,7 @@ const express = require('express');
 
 const cheerio = require("cheerio")
 const axios = require("axios")
-
+const path = require('path')
 const crypto = require('crypto');
 const server = express();
  
@@ -12,7 +12,7 @@ const  cors = require('cors');
 server.use(express.json());
 server.use(cors()); 
 const Scraper = require('./google');
-
+ 
 server.use(express.static(path.join(__dirname, 'public')));
 
 
